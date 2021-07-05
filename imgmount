@@ -1,0 +1,29 @@
+
+# 2021 @ JulianDroid
+
+echo "imgmount cmdline: $*"
+
+if [ ! "$3" ];then
+	echo "Usage: $0 <img> <partNum> <mountpoint> [loopNum]"
+	exit 1
+fi
+
+FILENAME=$(basename "$1")
+SEC=$(Fdisk -l "$1" |grep Units |cut -d' ' -f6)
+PRESTART=$(Fdisk -l "$1" |grep "$FILENAME$2 " |tr -s ' ')
+START=$(echo "$PRESTART" |cut -d' ' -f2)
+(echo "$START" |grep -q '*') && START=$(echo "$PRESTART" |cut -d' ' -f3)
+
+STARTB=$(expr $SEC '*' $START) || echo Parse offset failed: sectorSize=$SEC, startSector=$START
+
+LOOPNUM=$([ ! $4 ] && echo $2 || echo $4)
+echo loopdev num = $LOOPNUM
+LODEV=/dev/loop$LOOPNUM
+mknod "$LODEV" b 7 $LOOPNUM
+# losetup --offset $STARTB "$LODEV" "$1" || ( echo 'Patch Failed.' && exit 1) || exit 1
+losetup -o $STARTB "$LODEV" "$1" || ( echo 'Patch Failed.' && exit 1 ) || exit 1
+echo 'Patched to '"$LODEV"
+
+mount -t ext4 -o ro "$LODEV" "$3"
+echo Mounted on "$LODEV"
+echo "If you wanna umount it, umount \"$LODEV\" and then run 'losetup -d \"$LODEV\"'"

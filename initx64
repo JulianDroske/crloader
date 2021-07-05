@@ -1,0 +1,6 @@
+#!/busybox64 sh
+
+exec /busybox64 sh /bootstrap x64
+
+# exec switch_root "/ROOT/FS" /sbin/init 3
+

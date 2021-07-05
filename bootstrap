@@ -1,0 +1,199 @@
+panic(){
+	echo "$@"
+	sleep 5
+	sh
+	# reboot -f
+	exit 1
+}
+
+export ARCH="x32"
+ARCH="$1"
+export PATH="/:/$ARCH"
+export LD_LIBRARY_PATH="/$ARCH:/$ARCH/lib"
+
+export ROOT="/ROOT"
+mount -t tmpfs tmpfs "$ROOT" || panic
+mount -t tmpfs tmpfs /tmp
+ln -s "/$ARCH/lib/ld-linux.so" "$ROOT/ld"
+
+# create necessary dirs for init
+mkdir -p "$ROOT/DEV" "$ROOT/ISO" "$ROOT/FS" "$ROOT/MODU"
+
+mount -t devtmpfs devtmpfs "/dev" || panic "Mounting dev failed."
+mount -t proc none "/proc" || panic "Mounting proc failed."
+mount -t sysfs sysfs /sys || panic "Mounting sys failed."
+
+echo 'Welcome to CrLoader!'
+
+ROOTDEV=
+ISOFILE=
+IMGPATH=
+OSNUM=
+MODU=
+OEMNUM=
+
+FSOPT="ro"
+
+
+Modir="/lib/modules/$(uname -r)"
+if [ -d "$Modir" ]; then
+	#  With Ubuntu
+	# . /scripts/functions
+	# load_modules
+	
+	#  From Ubuntu
+	modprobe -a i8042 atkbd ehci-pci ehci-orion \
+		ehci-hcd ohci-hcd ohci-pci uhci-hcd usbhid xhci \
+		xhci-pci xhci-hcd
+	modprobe i2c_hid_acpi
+	for type in hid nvmem acpi; do
+		for modalias in /sys/bus/$type/devices/*/modalias; do
+			if [ -f "${modalias}" ]; then
+				modprobe "$(cat ${modalias})"
+			fi
+		done
+	done
+	modprobe ext4
+	modprobe amdgpu
+	modprobe -r nouveau
+	modprobe nvme
+fi
+
+for opt in $(cat "/proc/cmdline"); do
+	case $opt in
+		ROOTDEV=?*)
+			ROOTDEV=${opt#ROOTDEV=}
+			;;
+		ISOFILE=?*)
+			ISOFILE=${opt#ISOFILE=}
+			;;
+		IMGPATH=?*)
+			IMGPATH=${opt#IMGPATH=}
+			;;
+		OSNUM=?*)
+			OSNUM=${opt#OSNUM=}
+			;;
+		OEMNUM=?*)
+			OEMNUM=${opt#OEMNUM=}
+			;;
+		MODEV=?*)
+			MODU=${opt#MODEV=}
+			;;
+	esac
+done
+
+mount $MODU "$ROOT/MODU"
+
+mountroot(){
+	# mount -o "$FSOPT" "$ROOT/ISO/$IMGPATH" "$ROOT/FS" || panic "Mounting FS failed"
+	sh "/imgmount" "$1/$IMGPATH" $OSNUM "$ROOT/FS" || panic "Mounting FS failed"
+}
+
+[ -n "$ROOTDEV" ] || panic "ROOTDEV not set"
+[ -n "$IMGPATH" ] || panic "IMGPATH not set"
+[ -n "$OSNUM" ] || panic "OSNUM not set"
+mount -t ext4 "$ROOTDEV" "$ROOT/DEV"
+RDDEV=
+if [ -n "$ISOFILE" ]; then
+	mount "$ROOT/DEV/$ISOFILE" "$ROOT/ISO" || panic "Mounting ISO failed"
+	RDDEV="$ROOT/ISO"
+else
+	RDDEV="$ROOT/DEV"
+fi
+mountroot "$RDDEV"
+
+# mount oem
+imgmount "$RDDEV/$IMGPATH" $OEMNUM "$ROOT/FS/usr/share/oem"
+
+mount --bind /dev "$ROOT/FS/dev"
+mount --bind /proc "$ROOT/FS/proc"
+mount --bind /sys "$ROOT/FS/sys"
+# mkdir -p "$ROOT/FS/sys/fs/selinux"
+
+
+for modir in "$ROOT/FS$Modir" "$ROOT/MODU$Modir" "$Modir" "$ROOT/DEV$Modir" "$ROOT/ISO$Modir"; do
+	if [ -d "$modir" ]; then
+		echo 'Moudles found. Trying to deploy modules...'
+		[ ! -d /lib/modules ] && mkdir -p /lib/modules
+		ln -s "$modir" "$Modir"
+		mount --bind "/lib/modules" "$ROOT/FS/lib/modules"
+
+		modprobe virtio
+		modprobe virtio_ring
+		modprobe virtio_pci
+		modprobe virtio_blk
+		
+		modprobe virtio-rng
+		modprobe virtio-gpu
+		modprobe virtio_scsi
+		break
+	fi
+done
+
+# auto scripts replacement
+Insdir="/autoinstall"
+for insdir in "$ROOT/FS$Insdir" "$ROOT/MODU$Insdir" "$Insdir" "$ROOT/DEV$Insdir" "$ROOT/ISO$Insdir"; do
+	if [ -d "$insdir" ]; then
+		cd "$insdir"
+		echo 'System replacements found. Deploying...'
+		for file in $(find . -type f); do
+			echo Replacing $file ...
+			mkdir -p /tmp/"$(dirname $file)"
+			cp "$file" "/tmp/$file"
+			mount --bind -o mode=4777 "/tmp/$file" "$ROOT/FS/$file"
+		done
+		break
+	fi
+done
+
+# Wait! Patch chromeos_startup is necessary
+export STARTUP="$ROOT/FS/sbin/chromeos_startup"
+# umount "$STARTUP"
+cp "$STARTUP" /tmp/chromeos_startup
+# Patch stateful
+# sed -i '/if \! mount/, /fi/d' /tmp/chromeos_startup
+sed -i 's/\! mount.*STATE.*\\/! true \\/g' /tmp/chromeos_startup
+# sed -i 's/\${STATE_DEV}/tmpfs/g' /tmp/chromeos_startup
+# sed -i 's/\${FS_FORMAT_STATE}/tmpfs/g' /tmp/chromeos_startup
+mount -t tmpfs -o mode=0777 tmpfs "$ROOT/FS/mnt/stateful_partition"
+mount -t tmpfs -o mode=0777 tmpfs "$ROOT/FS/var"
+# Patch OEM
+sed -i '/mount.*\/oem$/d' /tmp/chromeos_startup
+# Misc
+sed -i 's/file_attrs_cleaner_tool /true /g' /tmp/chromeos_startup
+sed -i 's/check_directory /true /g' /tmp/chromeos_startup
+sed -i 's/\$ROOTDEV_TYPE/\/dev\/ram/g' /tmp/chromeos_startup
+sed -i 's/do_mount_var_and_home_chronos /true /g' /tmp/chromeos_startup
+sed -i 's/restorecon/true/g' /tmp/chromeos_startup
+mount --bind -o mode=4777 /tmp/chromeos_startup "$STARTUP"
+
+# Next is pre-startup
+export PRESTARTUP="$ROOT/FS/etc/init/pre-startup.conf"
+# umount "$PRESTARTUP"
+cp "$PRESTARTUP" /tmp/pre-startup.conf
+sed -i '/oom/d' /tmp/pre-startup.conf
+sed -i 's/enforce/enfore/g' /tmp/pre-startup.conf
+mount --bind -o mode=4777 /tmp/pre-startup.conf "$PRESTARTUP"
+
+# Next is startup_utils.sh
+export UTILS="$ROOT/FS/usr/share/cros/startup_utils.sh"
+cp "$UTILS" /tmp/startup_utils.sh
+sed -i 's/mount-encrypted/true/g' /tmp/startup_utils.sh
+mount --bind -o mode=4777 /tmp/startup_utils.sh "$UTILS"
+
+# Patch static_node_tool to make udev work
+find "$ROOT/FS" -name static_node_tool |xargs -n 1 mount --bind -o mode=4777 /PRE/True
+
+# Getting into os
+
+exec switch_root "$ROOT/FS" /sbin/init -v 5
+
+# pivot_root "$ROOT/FS" "$ROOT/FS/tmp"
+# exec /sbin/init 5
+
+# chroot "$ROOT/FS" /sbin/init 5
+# chroot "$ROOT/FS" /sbin/telinit 5
+
+# Must be PID 1
+
+# busybox sh

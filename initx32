@@ -1,0 +1,6 @@
+#!/busybox32 sh
+
+exec /busybox32 sh /bootstrap x32
+
+# exec switch_root "/ROOT/FS" /sbin/init 3
+

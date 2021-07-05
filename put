@@ -1,0 +1,5 @@
+#!/bin/sh
+
+mount /dev/nvme0n1p7 /mnt
+cp /tmp/crloader.gz /mnt/
+umount /mnt
