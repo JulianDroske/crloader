@@ -6,7 +6,7 @@ The ChromiumOS LiveCD
 ---
 
 # Attention: to use initrd (crloader.gz), you MUST load a generic kernel instead of the one from ChromiumOS.
-To use a ChromiumOS kernel, you may need to unpack them into an ext4 partition, then load /init as init.
+To use a ChromiumOS kernel to boot up, you may need to unpack them into an ext4 partition, then load /init as init.
 
 ---
 
@@ -44,7 +44,7 @@ Which:
 ```
 ROOTDEV, IMGPATH, OSNUM must be set.
 To use modules on the disk, you need to put the folder 'lib' containing folder 'modules' at / of the $MODEV
-The multi-loading /initrd.gz /crloader.gz does not support QEMU direct-booting. So you need to create a drive containig modules(as the last line says) to boot.
+Multi-loading /initrd.gz /crloader.gz does not support QEMU direct-booting. You need to create a drive containig modules(as the last line says) to boot.
 ```
 
 ---
@@ -56,5 +56,5 @@ Copy it to somewhere you want, then load.
 ---
 
 This project does not contain modules. Include your modules from kernel first.
-Tested: CloudReady v83.4.4
+Tested: CloudReady v83.4.4 with Linux kernel 5.12.12-generic
 
